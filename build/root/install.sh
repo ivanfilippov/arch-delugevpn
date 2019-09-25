@@ -28,7 +28,7 @@ fi
 source upd.sh
 
 # define pacman packages
-pacman_packages="libtorrent-rasterbar openssl python-chardet python-dbus python-distro python-geoip python-idna python-mako python-pillow python-pyopenssl python-rencode python-service-identity python-setproctitle python-six python-future python-requests python-twisted python-xdg python-zope-interface xdg-utils libappindicator-gtk3 deluge"
+pacman_packages="libtorrent-rasterbar openssl python-chardet python-dbus python-distro python-geoip python-idna python-mako python-pillow python-pyopenssl python-rencode python-service-identity python-setproctitle python-six python-future python-requests python-twisted python-xdg python-zope-interface xdg-utils libappindicator-gtk3 patch deluge"
 
 # install compiled packages using pacman
 if [[ ! -z "${pacman_packages}" ]]; then
@@ -139,6 +139,14 @@ else
 	export DELUGE_WEB_LOG_LEVEL="info"
 fi
 
+export DELUGE_WEB_AUTOLOGIN=$(echo "${DELUGE_WEB_AUTOLOGIN}" | sed -e 's~^[ \t]*~~;s~[ \t]*$~~')
+if [[ ! -z "${DELUGE_WEB_AUTOLOGIN}" ]]; then
+	echo "[info] DELUGE_WEB_AUTOLOGIN defined as '${DELUGE_WEB_AUTOLOGIN}'" | ts '%Y-%m-%d %H:%M:%.S'
+else
+	echo "[info] DELUGE_WEB_AUTOLOGIN not defined,(via -e DELUGE_WEB_AUTOLOGIN), defaulting to 'no'" | ts '%Y-%m-%d %H:%M:%.S'
+	export DELUGE_WEB_AUTOLOGIN="no"
+fi
+
 export APPLICATION="deluge"
 
 EOF
@@ -149,6 +157,60 @@ sed -i '/# ENVVARS_PLACEHOLDER/{
     r /tmp/envvars_heredoc
 }' /usr/local/bin/init.sh
 rm /tmp/envvars_heredoc
+
+# add hook for webui-autologin without affecting other other potential uses for the CONFIG_PLACEHOLDER
+cat << 'EOF' > /tmp/webui-autologin_heredoc
+# CONFIG_PLACEHOLDER
+
+PATCH=$(cat <<'PATCH'
+diff -Naur deluge-orig/ui/web/auth.py deluge/ui/web/auth.py
+--- deluge-orig/ui/web/auth.py  2020-07-19 09:09:15.000000000 +0000
++++ deluge/ui/web/auth.py       2021-01-22 05:53:59.396212944 +0000
+@@ -122,6 +122,7 @@
+         return True
+
+     def check_password(self, password):
++        return True
+         config = self.config
+         if 'pwd_sha1' not in config.config:
+             log.debug('Failed to find config login details.')
+diff -Naur deluge-orig/ui/web/js/deluge-all-debug.js deluge/ui/web/js/deluge-all-debug.js
+--- deluge-orig/ui/web/js/deluge-all-debug.js   2020-07-19 09:09:15.000000000 +0000
++++ deluge/ui/web/js/deluge-all-debug.js        2021-01-22 05:50:44.149705748 +0000
+@@ -7430,7 +7430,7 @@
+     },
+
+     onShow: function() {
+-        this.passwordField.focus(true, 300);
++        this.onLogin();
+     },
+ });
+ /**
+PATCH
+)
+
+DELUGE_LIB_PATH=$(echo -e "import sys, os\nfor path in sys.path:\n  if os.path.exists(path + '/deluge') == True:\n    print(path)" | python)
+
+# apply patch to bypass web ui login
+if [[ ! -z "${DELUGE_WEB_AUTOLOGIN}" ]]; then
+    if [[ ! -z "${DELUGE_LIB_PATH}" ]]; then
+        if [ "${DELUGE_WEB_AUTOLOGIN}" != "no" ] && [ "${DELUGE_WEB_AUTOLOGIN}" != "No" ] && [ "${DELUGE_WEB_AUTOLOGIN}" != "NO" ]; then
+            echo "[info] Patching deluge to disable login prompt" | ts '%Y-%m-%d %H:%M:%.S'
+            echo "$PATCH" | patch -d$DELUGE_LIB_PATH/ -p0 -f -r - > /dev/null || true
+        else
+            echo "[info] Removing patch to disable login prompt" | ts '%Y-%m-%d %H:%M:%.S'
+            echo "$PATCH" | patch -d$DELUGE_LIB_PATH/ -p0 -f -r - -R > /dev/null || true
+        fi  
+    else
+        echo "[info] Unable to find deluge package, skipping DELUGE_WEB_AUTOLOGIN configuration." | ts '%Y-%m-%d %H:%M:%.S'
+    fi
+fi
+EOF
+sed -i '/# CONFIG_PLACEHOLDER/{
+    s/# CONFIG_PLACEHOLDER//g
+    r /tmp/webui-autologin_heredoc
+}' /usr/local/bin/init.sh
+rm /tmp/webui-autologin_heredoc
 
 # cleanup
 cleanup.sh
